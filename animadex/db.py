@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 # --- tag classification (the danbooru core_tags vocabulary) -------------
@@ -205,10 +206,28 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
         conn.executescript(f.read())
 
 
+def _rnd(slug, seed):
+    """SQL function: a stable shuffle key for `ORDER BY rnd(slug, ?)`.
+
+    SQLite has no hash function and `ORDER BY RANDOM()` would reshuffle
+    on every query -- so paging through a random-ordered list would
+    repeat and skip entries. Hashing the slug with the seed keeps the
+    order fixed for a given seed while still reshuffling when the seed
+    changes (the same contract the other datasets' random sort offers).
+    """
+    try:
+        s = int(seed or 0)
+    except (TypeError, ValueError):
+        s = 0
+    return (zlib.crc32(str(slug).encode('utf-8')) * 2654435761 + s) \
+        % 2147483647
+
+
 def connect_rw(path: str | Path) -> sqlite3.Connection:
     """Open a writable connection and ensure the schema exists."""
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.create_function('rnd', 2, _rnd)
     conn.execute('PRAGMA journal_mode = WAL')
     conn.execute('PRAGMA synchronous = NORMAL')
     _apply_schema(conn)
@@ -219,6 +238,7 @@ def connect_rw(path: str | Path) -> sqlite3.Connection:
 def connect_ro(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.create_function('rnd', 2, _rnd)
     conn.execute('PRAGMA busy_timeout = 3000')
     conn.execute('PRAGMA query_only = 1')
     return conn
@@ -547,6 +567,176 @@ def toggle_category(conn, artist, category):
         'INSERT INTO artist_categories(artist, category) VALUES (?, ?)',
         (artist, category))
     return True
+
+
+# --- favourites --------------------------------------------------------
+# kind -> (table, primary-key column). Characters and artists keep
+# separate slug spaces, so a favourite is only unique as a (kind, slug)
+# pair.
+FAV_TABLES = {
+    'characters': ('characters', 'character'),
+    'artists':    ('artists', 'artist'),
+}
+
+# One row per favourited entry, drawn from whichever table owns it, in a
+# shape the gallery serializers already understand. Characters have no
+# `score`; artists have no tags/series -- hence the literal filler
+# columns so both halves of the UNION line up.
+_FAV_UNION = """
+  SELECT 'characters' AS kind, character AS slug, name, name_lower,
+         trigger, count, url, NULL AS score, core_tags, copyright,
+         copyright_name, image_version, search_blob,
+         (SELECT f.created_at FROM favourites f
+           WHERE f.kind = 'characters'
+             AND f.slug = characters.character) AS fav_created
+    FROM characters
+   WHERE character IN
+         (SELECT slug FROM favourites WHERE kind = 'characters')
+  UNION ALL
+  SELECT 'artists' AS kind, artist AS slug, name, name_lower,
+         trigger, count, url, score, '' AS core_tags, '' AS copyright,
+         '' AS copyright_name, image_version, search_blob,
+         (SELECT f.created_at FROM favourites f
+           WHERE f.kind = 'artists'
+             AND f.slug = artists.artist) AS fav_created
+    FROM artists
+   WHERE artist IN
+         (SELECT slug FROM favourites WHERE kind = 'artists')
+"""
+
+
+def favourite_kinds(conn):
+    """Every favourite, as {'characters': {slug, ...}, 'artists': {...}}.
+
+    The frontend loads this once per page view and keeps it in memory,
+    so tile rendering never has to wait on a per-tile lookup.
+    """
+    out = {kind: set() for kind in FAV_TABLES}
+    for r in conn.execute('SELECT kind, slug FROM favourites'):
+        bucket = out.get(r['kind'])
+        if bucket is not None:
+            bucket.add(r['slug'])
+    return out
+
+
+def count_favourites(conn, kind=None):
+    if kind is None:
+        return conn.execute('SELECT COUNT(*) FROM favourites').fetchone()[0]
+    return conn.execute(
+        'SELECT COUNT(*) FROM favourites WHERE kind = ?',
+        (kind,)).fetchone()[0]
+
+
+def is_favourite(conn, kind, slug):
+    return conn.execute(
+        'SELECT 1 FROM favourites WHERE kind = ? AND slug = ?',
+        (kind, slug)).fetchone() is not None
+
+
+def fav_entity_exists(conn, kind, slug):
+    """Guard against hearting something that isn't in the catalogue."""
+    table, key = FAV_TABLES[kind]
+    return conn.execute(
+        f'SELECT 1 FROM {table} WHERE {key} = ? LIMIT 1',
+        (slug,)).fetchone() is not None
+
+
+def toggle_favourite(conn, kind, slug):
+    """Heart / un-heart. Returns the new state (True = favourited)."""
+    if is_favourite(conn, kind, slug):
+        conn.execute('DELETE FROM favourites WHERE kind = ? AND slug = ?',
+                     (kind, slug))
+        return False
+    conn.execute(
+        'INSERT OR IGNORE INTO favourites(kind, slug, created_at) '
+        "VALUES(?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))",
+        (kind, slug))
+    return True
+
+
+def prune_favourites(conn):
+    """Drop favourites whose character/artist is no longer in the
+    catalogue -- which happens when a dataset is re-imported or trimmed.
+    Returns how many were removed."""
+    removed = 0
+    for kind, (table, key) in FAV_TABLES.items():
+        cur = conn.execute(
+            'DELETE FROM favourites '
+            'WHERE kind = ? AND slug NOT IN (SELECT {key} FROM {table})'
+            .format(key=key, table=table), (kind,))
+        removed += cur.rowcount or 0
+    return removed
+
+
+def search_favourites(conn, q='', sort='recent', filters=None,
+                      page=1, page_size=72, seed=None):
+    """Favourites as a gallery dataset: search + sort + paging.
+
+    The one filter is `kinds` -- which of the two datasets to show. It is
+    spelled like the other datasets' facet filters so the gallery API can
+    treat all four modes alike, with one deliberate difference:
+
+        kinds absent / None  -> no restriction (both datasets)
+        kinds = both         -> both
+        kinds = one          -> just that one
+        kinds = empty set    -> nothing at all
+
+    That last case is what the favourites page shows when the user has
+    unticked both boxes: an honest empty list rather than a surprise
+    "everything".
+    """
+    filters = filters or {}
+    where, params = [], []
+    for token in parse_query(q):
+        where.append("search_blob LIKE ? ESCAPE '\\'")
+        params.append(_like(token))
+
+    kinds = filters.get('kinds')
+    if kinds is not None:
+        kinds = {k for k in kinds if k in FAV_TABLES}
+        if kinds:
+            where.append('kind IN (' + ','.join('?' * len(kinds)) + ')')
+            params.extend(sorted(kinds))
+        else:
+            where.append('0')            # nothing ticked -> nothing shown
+
+    wsql = (' WHERE ' + ' AND '.join(where)) if where else ''
+
+    total = conn.execute(
+        'SELECT COUNT(*) FROM (' + _FAV_UNION + ')' + wsql,
+        params).fetchone()[0]
+
+    if sort == 'az':
+        order, sort_params = 'name_lower', []
+    elif sort == 'random':
+        order, sort_params = 'rnd(slug, ?)', [_seed(seed)]
+    elif sort == 'count':
+        order, sort_params = 'count DESC, name_lower', []
+    else:                       # 'recent' -- newest heart first
+        order, sort_params = 'fav_created DESC, name_lower', []
+
+    rows = conn.execute(
+        f'SELECT * FROM ({_FAV_UNION}){wsql} '
+        f'ORDER BY {order} LIMIT ? OFFSET ?',
+        params + sort_params + [page_size, (page - 1) * page_size]).fetchall()
+    return total, rows
+
+
+def clear_favourites(conn):
+    """Empty the list. Used by an import that replaces rather than merges."""
+    conn.execute('DELETE FROM favourites')
+
+
+def list_favourites(conn, kind=None):
+    """Every favourite with enough detail to export it. Used by the
+    backup download, which wants the whole list rather than a page."""
+    sql = 'SELECT * FROM (' + _FAV_UNION + ')'
+    params: list = []
+    if kind:
+        sql += ' WHERE kind = ?'
+        params.append(kind)
+    sql += ' ORDER BY kind, name_lower'
+    return conn.execute(sql, params).fetchall()
 
 
 # --- meta + LoRAs ------------------------------------------------------

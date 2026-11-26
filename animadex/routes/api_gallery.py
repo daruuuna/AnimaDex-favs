@@ -6,7 +6,7 @@ from flask import Blueprint, abort, current_app, g, jsonify, request
 
 from .. import db
 from ..images import (serialize_character, serialize_artist,
-                      serialize_copyright)
+                      serialize_copyright, serialize_favourite)
 
 api = Blueprint('api_gallery', __name__)
 
@@ -27,12 +27,26 @@ DATASETS = {
         'count':     db.count_artists,
         'serialize': serialize_artist,
     },
+    # Your own hearted list. It spans both datasets, so it has no
+    # facets of its own -- the sidebar hides itself, as it does for the
+    # copyright browse view.
+    'favourites': {
+        'facets':    (),
+        'search':    db.search_favourites,
+        'facet':     lambda conn, name, q='', limit=30:
+                     {'label': name, 'total': 0, 'values': []},
+        'count':     db.count_favourites,
+        'serialize': serialize_favourite,
+    },
 }
 
 
-def _api_cache_header(resp):
+def _api_cache_header(resp, private=False):
     secs = int(current_app.config['ANIMADEX'].cache.api_seconds)
-    resp.headers['Cache-Control'] = f'public, max-age={secs}'
+    # Favourites are personal, so a shared cache must not serve them;
+    # the rest of the catalogue is the same for everybody.
+    resp.headers['Cache-Control'] = (
+        'no-store' if private else f'public, max-age={secs}')
     return resp
 
 
@@ -45,7 +59,7 @@ def api_facets(mode):
     resp = jsonify(total=plumb['count'](conn), facets={
         name: plumb['facet'](conn, name, '', 30) for name in plumb['facets']
     })
-    return _api_cache_header(resp)
+    return _api_cache_header(resp, private=mode == 'favourites')
 
 
 @api.route('/api/<mode>/facet/<name>')
@@ -65,6 +79,7 @@ def api_search(mode):
     plumb = DATASETS.get(mode)
     if plumb is None:
         abort(404)
+    private = mode == 'favourites'
     args = request.args
     page_size = current_app.config['ANIMADEX'].gallery.page_size
     try:
@@ -74,6 +89,11 @@ def api_search(mode):
     filters = {f: set(args.getlist(f)) for f in plumb['facets']}
     if args.get('loras'):
         filters['loras'] = True
+    if mode == 'favourites':
+        # Which datasets to show. `kind` absent means "both"; present but
+        # empty means the user unticked both boxes, which means "nothing".
+        filters['kinds'] = (set(args.getlist('kind'))
+                            if 'kind' in args else None)
     total, rows = plumb['search'](
         g.db,
         q=args.get('q', '').strip(),
@@ -95,7 +115,7 @@ def api_search(mode):
         pages=(total + page_size - 1) // page_size,
         results=results,
     )
-    return _api_cache_header(resp)
+    return _api_cache_header(resp, private=private)
 
 
 # --- copyrights (derived from the characters table) --------------------

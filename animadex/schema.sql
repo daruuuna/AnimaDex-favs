@@ -94,3 +94,16 @@ CREATE TABLE IF NOT EXISTS copyright_versions (
     filename TEXT PRIMARY KEY,
     version  INTEGER NOT NULL
 );
+
+-- Personal favourites: the things you hearted. AnimaDex is single-user
+-- by design, so there is no user column -- one list per install.
+-- `kind` is the dataset the slug belongs to ('characters' or 'artists'),
+-- because the two slug spaces are independent and can collide.
+CREATE TABLE IF NOT EXISTS favourites (
+    kind       TEXT NOT NULL,     -- 'characters' | 'artists'
+    slug       TEXT NOT NULL,
+    created_at TEXT NOT NULL,     -- ISO-8601 UTC; drives "recently added"
+    PRIMARY KEY (kind, slug)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_fav_kind_created
+    ON favourites(kind, created_at DESC, slug);

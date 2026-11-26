@@ -21,6 +21,12 @@ const MODES = {
     placeholder: n => `Search ${n} copyrights by name…`,
     countLabel: 'Character Count',
   },
+  favourites: {
+    noun: 'favourite',
+    facets: [],                         // your own list -- nothing to filter
+    placeholder: n => `Search your ${n} favourites…`,
+    countLabel: 'Image Count',
+  },
 };
 const DEFAULT_OPEN = new Set();   // every facet group starts collapsed
 const DEV = window.ANIMADEX_DEV === true;   // run: python app.py --dev
@@ -49,6 +55,9 @@ const state = {
   regenMode: false,           // dev mode: character regenerate toggle
   regenning: new Set(),       // dev mode: slugs regenerating in background
   lorasOnly: false,           // characters: only those with a CivitAI LoRA
+  // favourites: which datasets to show. Both by default; empty means the
+  // user unticked both, which really does mean "show nothing".
+  favKinds: new Set(['characters', 'artists']),
 };
 
 const $ = s => document.querySelector(s);
@@ -114,9 +123,144 @@ async function copyText(text, note){
   toast(note);
 }
 
+/* ===== favourites =================================================== */
+/* Hearted entries live in SQLite (so they outlive the browser), but the
+   whole list is mirrored in memory on page load. Tiles are stamped from
+   that copy, which keeps /api/<mode>/search -- a cacheable, shared
+   response -- free of anything personal. */
+const favs = { characters: new Set(), artists: new Set() };
+let favTotal = 0;
+
+/* On the favourites page a tile can be either dataset, so the payload
+   carries `kind`; everywhere else the current mode IS the kind. */
+const favKindOf = c => (c.kind === 'artists' ? 'artists' : 'characters');
+const tileKind = c => (state.mode === 'favourites' ? favKindOf(c) : state.mode);
+
+const HEART_PATH =
+  'M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 ' +
+  '7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z';
+
+/* Hearted = a solid heart; unhearted = the same outline. Same path, so
+   the icon never shifts position. */
+/* The type filter, mirrored onto the two checkboxes in the toolbar. */
+function syncFavKindBoxes(){
+  document.querySelectorAll('[data-favkind]').forEach(cb => {
+    cb.checked = state.favKinds.has(cb.dataset.favkind);
+    const opt = cb.closest('.fopt');
+    if (opt) opt.classList.toggle('on', cb.checked);
+  });
+}
+
+function renderFavCounts(){
+  for (const kind of ['characters', 'artists']){
+    const el = document.querySelector(
+      `[data-favkind-count="${kind}"]`);
+    if (el) el.textContent = favs[kind] ? favs[kind].size : 0;
+  }
+}
+
+/* Both ticked is the default, so it writes nothing to the address bar.
+   One ticked writes that one. Neither writes an empty `kind`, which the
+   server reads as "nothing" rather than "no filter". */
+function appendFavKinds(p){
+  if (state.mode !== 'favourites') return p;
+  const k = state.favKinds;
+  if (k.size === 2) return p;
+  if (k.size === 0){ p.append('kind', ''); return p; }
+  for (const v of k) p.append('kind', v);
+  return p;
+}
+
+function favBtnHTML(on){
+  return `<button class="tile-fav-btn${on ? ' on' : ''}" data-w="fav"
+    type="button" aria-pressed="${on ? 'true' : 'false'}"
+    aria-label="${on ? 'Remove from favourites' : 'Add to favourites'}">
+    <svg viewBox="0 0 24 24" ${on
+      ? 'fill="currentColor"'
+      : 'fill="none" stroke="currentColor" stroke-width="2" ' +
+        'stroke-linecap="round" stroke-linejoin="round"'}>
+      <path d="${HEART_PATH}"></path></svg></button>`;
+}
+
+async function loadFavourites(){
+  try {
+    const d = await (await fetch('/api/favourites')).json();
+    favs.characters = new Set(d.characters || []);
+    favs.artists    = new Set(d.artists || []);
+    favTotal = d.total || 0;
+  } catch {
+    /* No list is better than no gallery -- the hearts just start off. */
+  }
+  syncFavBtn();
+}
+
+function syncFavBtn(){
+  const count = $('#fav-count');
+  count.textContent = favTotal;
+  count.hidden = favTotal === 0;
+  const btn = $('#fav-btn');
+  const on = state.mode === 'favourites';
+  btn.classList.toggle('on', on);
+  btn.setAttribute('aria-current', on ? 'page' : 'false');
+  renderFavCounts();
+  syncFavKindBoxes();
+}
+
+/* Repaint one tile's heart without re-rendering the gallery. */
+function paintFavTile(tile, on){
+  const btn = tile.querySelector('.tile-fav-btn');
+  if (btn) btn.outerHTML = favBtnHTML(on);
+}
+
+function dropFavTile(tile){
+  tile.remove();
+  state.total = Math.max(0, (state.total || 1) - 1);
+  renderResultCount();
+  if (!gallery.querySelector('.tile')) renderEmptyState();
+}
+
+async function toggleFavourite(tile){
+  const kind = tile.dataset.kind || 'characters';
+  const slug = tile.dataset.slug;
+  if (!favs[kind]){                 // tiles that can't be hearted
+    toast('Favourites are only available for characters and artists');
+    return;
+  }
+  const want = !favs[kind].has(slug);
+
+  // optimistic: the heart flips immediately and rolls back on failure
+  favs[kind].add(slug);
+  if (!want) favs[kind].delete(slug);
+  favTotal = Math.max(0, favTotal + (want ? 1 : -1));
+  paintFavTile(tile, want);
+  syncFavBtn();
+
+  try {
+    const res = await fetch('/api/favourites/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, slug }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok)
+      throw new Error(data.error || ('HTTP ' + res.status));
+    if (typeof data.total === 'number') favTotal = data.total;
+    syncFavBtn();
+    if (state.mode === 'favourites' && !data.favourited) dropFavTile(tile);
+    toast(data.favourited ? '♥ Added to favourites'
+                          : 'Removed from favourites');
+  } catch (err){
+    if (want) favs[kind].delete(slug); else favs[kind].add(slug);
+    favTotal = Math.max(0, favTotal + (want ? -1 : 1));
+    paintFavTile(tile, !want);
+    syncFavBtn();
+    toast('Could not update favourites — ' + err.message);
+  }
+}
+
 /* ===== tiles ======================================================== */
 function tileHTML(c){
   const mode = state.mode;
+  const kind = tileKind(c);         // what this tile should look like
   const slug = encodeURIComponent(c.slug);
   const initial = (c.name || '?').trim().charAt(0).toUpperCase() || '?';
 
@@ -157,7 +301,7 @@ function tileHTML(c){
                              : '';
 
   let overlay, meta;
-  if (mode === 'artists'){
+  if (kind === 'artists'){
     overlay = `
       <div class="ov-scroll">
         <div class="ov-label">Artist tag</div>
@@ -203,16 +347,24 @@ function tileHTML(c){
          title="${esc(c.copyright_name)}">${esc(c.copyright_name)}</a>`;
   }
 
-  const loraCap = (mode === 'characters' && c.loras && c.loras.length)
+  const loraCap = (kind === 'characters' && c.loras && c.loras.length)
     ? '<span class="lora-cap">+ LORA</span>' : '';
+  // On the favourites page characters and artists share a grid, so each
+  // tile says which it is.
+  const kindBadge = mode === 'favourites'
+    ? `<div class="badge badge-kind">${kind === 'artists'
+        ? 'Artist' : 'Character'}</div>`
+    : '';
   return `<article class="tile" data-slug="${esc(c.slug)}"
+                   data-kind="${esc(kind)}"
                    data-img-url="${esc(c.img_url || '')}">
     <div class="thumb">
       ${ph}${shot}
       <div class="tbadges">
-        ${loraCap}<div class="badge"><i>▲</i> ${fmt(c.count)}</div>
+        ${loraCap}${kindBadge}<div class="badge"><i>▲</i> ${fmt(c.count)}</div>
       </div>
       <div class="overlay">${overlay}</div>
+      ${favBtnHTML(favs[kind] && favs[kind].has(c.slug))}
     </div>
     <div class="meta">${meta}</div>
   </article>`;
@@ -239,6 +391,7 @@ function buildParams(page){
   for (const f of facetOf())
     for (const v of state.filters[f]) p.append(f, v);
   if (state.lorasOnly) p.set('loras', '1');
+  appendFavKinds(p);
   return p;
 }
 
@@ -254,6 +407,7 @@ function urlFor(page){
   for (const f of facetOf())
     for (const v of state.filters[f]) p.append(f, v);
   if (state.lorasOnly) p.set('loras', '1');
+  appendFavKinds(p);
   const qs = p.toString();
   return location.pathname + (qs ? '?' + qs : '');
 }
@@ -264,13 +418,21 @@ function syncURL(page, push){
   else history.replaceState({}, '', url);
 }
 
-/* the Score sort option exists only for the Artists view */
+/* Sort options are per-view: Score only makes sense for Artists, and
+   "Recently Added" (when you hearted it) only exists for Favourites --
+   so a sort carried over from another view falls back to Image Count. */
 function syncSortControls(){
   if (state.sort === 'score' && state.mode !== 'artists')
     state.sort = 'count';
+  if (state.sort === 'recent' && state.mode !== 'favourites')
+    state.sort = 'count';
+  if (state.mode === 'favourites' && state.sort === 'count')
+    state.sort = 'recent';
   const sortEl = $('#sort');
   sortEl.querySelector('[data-sort="score"]').hidden =
     state.mode !== 'artists';
+  sortEl.querySelector('[data-sort="recent"]').hidden =
+    state.mode !== 'favourites';
   sortEl.querySelectorAll('button').forEach(b =>
     b.classList.toggle('on', b.dataset.sort === state.sort));
 }
@@ -283,10 +445,15 @@ function applyURL(){
   state.q = p.get('q') || '';
   const sortParam = p.get('sort');
   state.sort = (sortParam === 'az' || sortParam === 'score'
-                || sortParam === 'random') ? sortParam : 'count';
+                || sortParam === 'random' || sortParam === 'recent')
+    ? sortParam : 'count';
   const seedParam = parseInt(p.get('seed'), 10);
   state.seed = (state.sort === 'random' && seedParam > 0) ? seedParam : null;
   state.lorasOnly = p.get('loras') === '1';
+  state.favKinds = p.has('kind')
+    ? new Set(p.getAll('kind')
+        .filter(v => v === 'characters' || v === 'artists'))
+    : new Set(['characters', 'artists']);
   state.filters = freshFilters(state.mode);
   state.labels = {};
   for (const f of facetOf()){
@@ -303,6 +470,7 @@ function applyURL(){
   browseMenu.querySelectorAll('[data-browse]').forEach(b =>
     b.classList.toggle('on', b.dataset.browse === state.mode));
   syncSortControls();
+  syncFavBtn();
   document.body.classList.toggle('no-sidebar', facetOf().length === 0);
 
   refreshChips();
@@ -321,7 +489,6 @@ async function runSearch(page){
   statusEl.innerHTML = '';
   pagerEl.innerHTML = '';
 
-  const noun = MODES[state.mode].noun;
   try {
     const data = await fetch(apiURL('/search?') + buildParams(page))
       .then(r => r.json());
@@ -337,15 +504,8 @@ async function runSearch(page){
     state.total = data.total;
     state.pages = data.pages;
 
-    resultEl.innerHTML =
-      `<b>${data.total.toLocaleString()}</b> ${noun}` +
-      (data.total === 1 ? '' : 's') +
-      (data.pages > 1 ? ` · page ${page} of ${data.pages}` : '');
-    statusEl.innerHTML = data.total === 0
-      ? `<div class="big">⊘</div>
-         <div class="t1">No ${noun}s match</div>
-         <div class="t2">Try a different search or clear some filters.</div>`
-      : '';
+    renderResultCount();
+    renderEmptyState();
     renderPager();
   } catch (e){
     if (seq !== searchSeq) return;
@@ -353,6 +513,43 @@ async function runSearch(page){
       `<div class="big">⚠</div><div class="t1">Could not load results</div>
        <div class="t2">Is the server still running?</div>`;
   }
+}
+
+/* The two status lines, split out so removing a tile from the
+   favourites page can refresh them without a second server round-trip. */
+function renderResultCount(){
+  const noun = MODES[state.mode].noun;
+  resultEl.innerHTML =
+    `<b>${state.total.toLocaleString()}</b> ${noun}` +
+    (state.total === 1 ? '' : 's') +
+    (state.pages > 1 ? ` · page ${state.page} of ${state.pages}` : '');
+}
+
+function renderEmptyState(){
+  const noun = MODES[state.mode].noun;
+  if (state.total > 0){ statusEl.innerHTML = ''; return; }
+
+  if (state.mode === 'favourites' && favTotal === 0){
+    statusEl.innerHTML = `<div class="big">♡</div>
+      <div class="t1">Nothing favourited yet</div>
+      <div class="t2">Tap the ♥ in the corner of any tile and it will
+        show up here.</div>`;
+    return;
+  }
+  // An empty list here is the filter's doing, not an empty database, so
+  // say so -- otherwise it reads as if the favourites had gone missing.
+  if (state.mode === 'favourites' && state.favKinds.size === 0){
+    statusEl.innerHTML = `<div class="big">⊘</div>
+      <div class="t1">Both types are hidden</div>
+      <div class="t2">Tick Characters or Artists above to see your
+        favourites again.</div>`;
+    return;
+  }
+  statusEl.innerHTML = `<div class="big">⊘</div>
+    <div class="t1">No ${noun}s match</div>
+    <div class="t2">${state.mode === 'favourites'
+      ? 'Try a different search, or show both types above.'
+      : 'Try a different search or clear some filters.'}</div>`;
 }
 
 /* run a query, update the address bar, and jump to the top.
@@ -507,6 +704,7 @@ async function loadFacets(){
   $('#sort').querySelector('[data-sort="count"]').textContent =
     MODES[state.mode].countLabel;
   $('#artist-note').hidden = state.mode !== 'artists';
+  $('#fav-note').hidden = state.mode !== 'favourites';
   const lf = $('#loras-filter');
   lf.hidden = state.mode !== 'characters';
   $('#loras-only').checked = state.lorasOnly;
@@ -620,6 +818,7 @@ function switchMode(mode, preset){
   state.filters = freshFilters(mode);
   state.labels = {};
   state.lorasOnly = false;
+  state.favKinds = new Set(['characters', 'artists']);
   if (preset){                          // pre-apply a filter (e.g. series)
     state.filters[preset.facet] = new Set([preset.value]);
     state.labels[preset.value] = preset.label;
@@ -631,6 +830,7 @@ function switchMode(mode, preset){
   document.body.classList.toggle('no-sidebar',
     MODES[mode].facets.length === 0);
   syncSortControls();
+  syncFavBtn();
   refreshChips();
   loadFacets();
   go(1);
@@ -963,6 +1163,86 @@ $('#modeswitch').addEventListener('click', e => {
   if (btn) switchMode(btn.dataset.mode);
 });
 
+// Favourites -- a real link so Ctrl/middle-click opens its own tab,
+// but a plain click stays inside the app like the mode switch does.
+$('#fav-btn').addEventListener('click', e => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  switchMode('favourites');
+});
+
+// Characters / Artists tickboxes -- narrow the list in place.
+$('#fav-filters').addEventListener('change', e => {
+  const cb = e.target.closest('[data-favkind]');
+  if (!cb) return;
+  if (cb.checked) state.favKinds.add(cb.dataset.favkind);
+  else            state.favKinds.delete(cb.dataset.favkind);
+  syncFavKindBoxes();
+  go(1);
+});
+
+/* ----- import an exported favourites list -------------------------- */
+const favImportPanel  = $('#fav-import-panel');
+const favImportFile   = $('#fav-import-file');
+const favImportGo     = $('#fav-import-go');
+const favImportStatus = $('#fav-import-status');
+
+function setFavImportOpen(open){
+  favImportPanel.hidden = !open;
+  $('#fav-import-btn').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  favImportStatus.textContent = '';
+  favImportFile.value = '';
+  $('#fav-import-replace').checked = false;
+  $('#fav-import-replace').closest('.fopt').classList.remove('on');
+}
+
+$('#fav-import-btn').addEventListener('click',
+  () => setFavImportOpen(favImportPanel.hidden));
+$('#fav-import-cancel').addEventListener('click',
+  () => setFavImportOpen(false));
+$('#fav-import-replace').addEventListener('change', e =>
+  e.target.closest('.fopt').classList.toggle('on', e.target.checked));
+
+favImportGo.addEventListener('click', async () => {
+  const file = favImportFile.files && favImportFile.files[0];
+  if (!file){
+    favImportStatus.textContent = 'Choose a file first.';
+    return;
+  }
+  const form = new FormData();
+  form.append('file', file);
+  if ($('#fav-import-replace').checked) form.append('mode', 'replace');
+
+  favImportGo.disabled = true;
+  favImportStatus.textContent = 'Importing…';
+  try {
+    const res = await fetch('/api/favourites/import',
+                            { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok)
+      throw new Error(data.error || ('HTTP ' + res.status));
+
+    // The server is the source of truth for hearts, counts and order.
+    await loadFavourites();
+    runSearch(state.page);
+
+    const bits = [data.added + ' added'];
+    if (data.existing)  bits.push(data.existing + ' already hearted');
+    if (data.duplicate) bits.push(data.duplicate + ' repeated in the file');
+    if (data.unknown)   bits.push(data.unknown + ' not in this catalogue');
+    favImportStatus.textContent = bits.join(', ') + '.';
+    toast('Imported ' + data.added + ' favourite' +
+          (data.added === 1 ? '' : 's'));
+    if (data.unknown && data.unknown_slugs && data.unknown_slugs.length)
+      console.warn('Favourites not imported:', data.unknown_slugs.join(', '));
+  } catch (err){
+    favImportStatus.textContent = 'Import failed — ' + err.message;
+  } finally {
+    favImportGo.disabled = false;
+  }
+});
+
 // facet checkboxes (delegated)
 facetsEl.addEventListener('change', e => {
   const cb = e.target;
@@ -1098,6 +1378,14 @@ gallery.addEventListener('click', e => {
   const tile = e.target.closest('.tile');
   if (!tile) return;
 
+  // The heart sits inside the thumbnail, ahead of everything else that
+  // claims a click (dev-mode tile clicks, the copy buttons below).
+  if (e.target.closest('.tile-fav-btn')){
+    e.preventDefault();
+    toggleFavourite(tile);
+    return;
+  }
+
   // DEV: with a category active, a plain click on an artist tile toggles
   // its membership (the overlay buttons and links still work normally).
   if (DEV && state.mode === 'artists' && state.activeCat &&
@@ -1134,6 +1422,14 @@ gallery.addEventListener('click', e => {
     // opens in a new tab/window.
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();          // plain click -> filter in-app, no reload
+    // The favourites list has no series filter of its own, so a series
+    // link there jumps to the character view already narrowed to it.
+    if (state.mode === 'favourites'){
+      switchMode('characters', { facet: 'copyright',
+        value: series.dataset.copyright,
+        label: series.textContent.trim() });
+      return;
+    }
     applyFilter('copyright', series.dataset.copyright,
                 series.textContent.trim());
     return;
@@ -1333,4 +1629,9 @@ contactForm.addEventListener('submit', async e => {
 
 /* ===== boot ========================================================= */
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
-applyURL();
+(async () => {
+  // The hearted slugs must be known before the first gallery render, or
+  // every tile would paint unhearted and then flicker on.
+  await loadFavourites();
+  applyURL();
+})();

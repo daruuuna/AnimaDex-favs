@@ -79,6 +79,48 @@ Any value can also be overridden by an environment variable named
 
 See `docs/configuration.md` for the full reference.
 
+## Favourites
+
+Heart the ♡ on any character or artist tile to keep a shortlist of the
+entries you actually use. It is the one hosted-site feature worth
+self-hosting: your list lives in the same SQLite file as the catalogue,
+so there is no account, no login, and nothing extra to install.
+
+Open it from **♥ Favourites** in the top bar (between search and sort).
+The tiles there are ordinary tiles — same thumbnails, same copy buttons,
+and a heart of their own, so you can prune from the list.
+
+The toolbar above the grid does the rest:
+
+- **Show** — tick Characters, Artists, or both to narrow the list. The
+  choice goes in the URL (`&kind=artists`), so a filtered view can be
+  bookmarked and the back button works.
+- **Backup** — download the list as CSV or plain text.
+- **Import…** — load a list back in from either format, including the
+  exports the hosted site produces. Merging is the default and never
+  destroys anything; tick *Replace my list* to adopt the file's order
+  wholesale when moving machines.
+
+```sql
+-- created automatically on the next start; nothing to migrate
+SELECT kind, slug, created_at FROM favourites ORDER BY created_at DESC;
+```
+
+```bash
+# or from the command line, e.g. before the server has ever run
+.venv/bin/python -m animadex import-favourites ~/favs.csv --dry-run
+.venv/bin/python -m animadex import-favourites ~/favs.csv
+.venv/bin/python -m animadex import-favourites ~/favs.csv --replace
+```
+
+What is deliberately *not* here: the hosted site's "likes" (a 👍/👎 crowd
+vote on whether a render resembles its subject), its site-wide
+"times favourited" counter, and Collections. All three are per-account
+data, and a single-user install has nobody to compare with.
+
+See **[docs/favourites.md](docs/favourites.md)** for the schema, the API
+and how the import decides what to keep.
+
 ## Pipeline
 
 The `python -m animadex pipeline <csv>` command processes a CSV
@@ -140,6 +182,7 @@ animadex/                Python package
     pages.py             /  /c/<slug>
     sitemap.py           /sitemap.xml
     contact.py           /api/contact*
+    favourites.py        /api/favourites*  (personal hearted list)
     admin.py             /admin/*
   pipeline/              Data ingestion + image work
     orchestrator.py      Per-row driver
@@ -155,7 +198,7 @@ scripts/                 Standalone scripts (not on the Python path)
   clean_explicit_tags.py CSV tag-pruning helper
 
 samples/                 Tiny seed CSVs + thumbnails (committed)
-docs/                    Configuration + pipeline references
+docs/                    Configuration, favourites + pipeline references
 ```
 
 The Python package is self-contained. Image folders, the SQLite DB,

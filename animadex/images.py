@@ -65,6 +65,26 @@ def img_url(mode: str, slug: str, version: int | None = 0) -> str:
     return _versioned(f'/img/{mode}/{quote(slug, safe="()")}', version)
 
 
+# Kept unescaped because the hosted site's own exports do the same, and
+# because they read better to a human opening the file in a spreadsheet.
+_SLUG_SAFE = "()'"
+
+
+def entry_url(mode: str, slug: str) -> str:
+    """A shareable path to one entry, in the shape the hosted site uses.
+
+    This is not just cosmetics: an exported favourites file says what each
+    entry *is* by the shape of its URL (`/c/<slug>` for a character,
+    `/?mode=artists&artist=<slug>` for an artist), so exports from this
+    app have to write the same shape to be re-importable -- here or on
+    the hosted site. The slug is percent-encoded because catalogue slugs
+    really do contain `&`, `#`, `"` and even a literal `%20`.
+    """
+    if mode == 'artists':
+        return f'/?mode=artists&artist={quote(slug, safe=_SLUG_SAFE)}'
+    return f'/c/{quote(slug, safe=_SLUG_SAFE)}'
+
+
 # ---- API serializers (image_version-aware) -----------------------------
 
 def serialize_character(row) -> dict:
@@ -100,6 +120,34 @@ def serialize_artist(row) -> dict:
         'thumb_url': thumb_url('artists', slug, v),
         'img_url':   img_url(  'artists', slug, v),
         'has_image': True,
+    }
+
+
+def serialize_favourite(row) -> dict:
+    """A favourited entry, tagged with the dataset it came from (`kind`)
+    so the frontend can render it as an ordinary character or artist
+    tile instead of inventing a third look."""
+    kind = row['kind']
+    slug = row['slug']
+    v = row['image_version'] if 'image_version' in row.keys() else 0
+    return {
+        'slug': slug,
+        'kind': kind,
+        'name': row['name'],
+        'trigger': row['trigger'],
+        'tags': [t.strip()
+                 for t in (row['core_tags'] or '').split(',')
+                 if t.strip()],
+        'count': row['count'],
+        'url': row['url'],
+        'score': row['score'],
+        'copyright': row['copyright'],
+        'copyright_name': row['copyright_name'],
+        'thumb_url': thumb_url(kind, slug, v),
+        'img_url':   img_url(  kind, slug, v),
+        'has_image': True,
+        'favourited': True,
+        'added_at': row['fav_created'],
     }
 
 

@@ -20,6 +20,7 @@ from .routes.admin import admin_bp
 from .routes.api_gallery import api as api_gallery_bp
 from .routes.api_images import images_bp
 from .routes.contact import contact_bp
+from .routes.favourites import favourites_bp
 from .routes.pages import pages as pages_bp
 from .routes.sitemap import sitemap_bp
 
@@ -80,6 +81,7 @@ def create_app(cfg: Config | None = None) -> Flask:
     app.register_blueprint(images_bp)
     app.register_blueprint(sitemap_bp)
     app.register_blueprint(contact_bp)
+    app.register_blueprint(favourites_bp)
     app.register_blueprint(admin_bp)
 
     return app
@@ -98,7 +100,14 @@ def _ensure_database(cfg: Config) -> None:
     try:
         chars = db.count_characters(conn)
         artists = db.count_artists(conn)
+        # A re-imported dataset can drop a favourited entry; pruning
+        # keeps the favourites count honest instead of listing blanks.
+        orphans = db.prune_favourites(conn)
+        conn.commit()
     finally:
         conn.close()
     print(f'Ready: {chars} characters, {artists} artists  ({path})',
           flush=True)
+    if orphans:
+        print(f'Pruned {orphans} favourite(s) no longer in the dataset.',
+              flush=True)

@@ -7,6 +7,7 @@ Subcommands:
     build-thumbs Build any missing thumbnails / copyright collages.
     score       Score every artist with no score yet.
     sync-loras  Pull character LoRAs from CivitAI.
+    import-favourites  Heart everything in an exported favourites file.
     genkey      Print a fresh hex secret_key for config.toml.
     db-init     Create the schema + data dirs without doing anything else.
 
@@ -87,6 +88,47 @@ def _cmd_sync_loras(args):
     sync(cfg, full=args.full)
 
 
+def _cmd_import_favourites(args):
+    from . import favourite_import as favimport
+
+    cfg = load_config()
+    ensure_dirs(cfg)
+    try:
+        with open(args.file, 'rb') as f:
+            raw = f.read()
+    except OSError as exc:
+        print(f'Cannot read {args.file}: {exc}', file=sys.stderr)
+        return 1
+
+    entries = favimport.parse_export(raw)
+    if not entries:
+        print(f'No favourites found in {args.file}.', file=sys.stderr)
+        return 1
+
+    chars = sum(1 for k, _, _ in entries if k == 'characters')
+    artists = sum(1 for k, _, _ in entries if k == 'artists')
+    print(f'{args.file}: {len(entries)} entries read as '
+          f'{favimport.detect_format(raw).upper()}'
+          f' -- {chars} characters, {artists} artists.')
+
+    if args.dry_run:
+        print('--dry-run: nothing written.')
+        return 0
+
+    conn = db.connect_rw(cfg.paths.database)
+    try:
+        s = favimport.import_entries(conn, entries, replace=args.replace)
+    finally:
+        conn.close()
+
+    print(f"Added {s['added']}, already hearted {s['existing']}, "
+          f"duplicates {s['duplicate']}, unrecognised {s['unknown']}. "
+          f"List now holds {s['total']}.")
+    if s['unknown_slugs']:
+        print('  not imported: ' + ', '.join(s['unknown_slugs']))
+    return 0
+
+
 def _cmd_genkey(args):
     print(secrets.token_hex(32))
 
@@ -146,6 +188,16 @@ def main(argv=None):
     s.add_argument('--full', action='store_true',
                    help='Ignore the stored timestamp; full re-sync.')
     s.set_defaults(func=_cmd_sync_loras)
+
+    s = sub.add_parser('import-favourites',
+                       help='Heart everything in an exported favourites file.')
+    s.add_argument('file',
+                   help='animadex-favourites.csv or .txt (hosted or self-hosted).')
+    s.add_argument('--replace', action='store_true',
+                   help='Empty the current list first instead of merging.')
+    s.add_argument('--dry-run', action='store_true',
+                   help='Report what the file holds; write nothing.')
+    s.set_defaults(func=_cmd_import_favourites)
 
     s = sub.add_parser('genkey',
                        help='Print a fresh hex secret_key for config.toml.')

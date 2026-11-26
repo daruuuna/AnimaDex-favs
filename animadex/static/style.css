@@ -134,6 +134,36 @@ img{display:block}
   box-shadow:0 4px 16px -5px rgba(139,92,255,.8);}
 .modeswitch button:not(.on):hover{color:var(--text)}
 
+/* Favourites pill -- top-level navigation to your own hearted list.
+   Occupies the slot the hosted site spends on its GitHub link. */
+.fav-btn{
+  display:inline-flex;align-items:center;gap:7px;flex-shrink:0;
+  padding:8px 14px;border-radius:999px;
+  font-size:12.5px;font-weight:600;white-space:nowrap;color:var(--text);
+  background:rgba(255,255,255,.04);border:1px solid var(--line-bright);
+  transition:.16s;
+}
+.fav-btn:hover{
+  border-color:var(--c2);background:rgba(255,46,136,.10);
+  box-shadow:0 0 18px rgba(255,46,136,.18);
+}
+.fav-ico{flex-shrink:0;font-size:13px;line-height:1;color:var(--c1)}
+.fav-btn:hover .fav-ico{color:var(--c3)}
+.fav-btn.on{
+  color:#fff;border-color:transparent;background:var(--grad);
+  box-shadow:0 4px 16px -5px rgba(139,92,255,.8);
+}
+.fav-btn.on .fav-ico{color:#fff}
+/* running tally of how many you've hearted */
+.fav-count{
+  min-width:19px;padding:1px 6px;border-radius:999px;text-align:center;
+  font-size:11px;font-weight:700;line-height:1.5;
+  color:var(--text);background:var(--panel-2);
+  border:1px solid var(--line-bright);
+}
+.fav-btn.on .fav-count{color:#fff;background:rgba(7,7,14,.35);
+  border-color:rgba(255,255,255,.28)}
+
 /* "Browse by" dropdown nav menu */
 .navmenu{position:relative;flex-shrink:0}
 .navmenu-btn{
@@ -345,6 +375,61 @@ body.no-sidebar .main{border-left:none}
   border-radius:8px;
 }
 .disclaimer b{color:var(--text);font-weight:700}
+/* favourites toolbar -- type filter + backup + import, all in one strip.
+   The checkboxes reuse .fopt from the sidebar so they look native. */
+.favbar{
+  display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;
+  margin-bottom:16px;padding:8px 14px;border-radius:8px;
+  background:rgba(255,255,255,.03);border:1px solid var(--line);
+  border-left:2px solid var(--c1);
+}
+.favbar-group{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+}
+.favbar-right{margin-left:auto}
+.favbar-label{
+  font-size:9.5px;font-weight:800;letter-spacing:1.4px;
+  text-transform:uppercase;color:var(--faint);
+}
+.favbar .fopt{padding:5px 8px}
+.favbar .fopt .fl{font-size:12px}
+.favbar-link{color:var(--c3);font-weight:700;font-size:12px;
+  transition:color .13s}
+.favbar-link:hover{color:#fff}
+.favbar-sep{color:var(--faint)}
+.favbar-btn{
+  padding:6px 13px;border-radius:999px;font-size:12px;font-weight:700;
+  color:var(--text);background:rgba(255,255,255,.06);
+  border:1px solid var(--line-bright);transition:.14s;white-space:nowrap;
+}
+.favbar-btn:hover{color:#fff;border-color:var(--c2);
+  background:rgba(255,46,136,.12)}
+.favbar-btn:disabled{opacity:.5;cursor:default}
+.favbar-btn.primary{
+  color:#fff;background:var(--grad);border-color:transparent;
+  box-shadow:0 4px 14px -6px rgba(139,92,255,.8);
+}
+.favbar-status{font-size:11.5px;font-weight:600;color:var(--text);
+  min-width:0;overflow-wrap:anywhere}
+
+/* the import panel expands below the strip, pushing the grid down */
+.favimport{
+  flex-basis:100%;padding:10px 12px;margin-top:2px;border-radius:8px;
+  background:rgba(139,92,255,.07);border:1px dashed rgba(139,92,255,.5);
+}
+.favimport-hint{
+  margin:0 0 9px;font-size:11.5px;line-height:1.55;color:var(--muted);
+  max-width:70ch;
+}
+.favimport input[type=file]{
+  font:inherit;font-size:12px;color:var(--text);max-width:100%;
+}
+.favimport input[type=file]::file-selector-button{
+  font:inherit;font-size:12px;font-weight:700;cursor:pointer;
+  padding:6px 12px;margin-right:10px;border-radius:999px;
+  color:var(--text);background:rgba(255,255,255,.07);
+  border:1px solid var(--line-bright);
+}
 
 /* dev-mode category-curation bar */
 .devbar{
@@ -475,6 +560,12 @@ body.no-sidebar .main{border-left:none}
   .topbar > .sort,
   .topbar > .navmenu{display:none}
 
+  /* Favourites stays in the top bar -- it is navigation, not a filter,
+     and on the facet-less views the drawer is out of the way. Shrinks
+     to a heart + count so row one doesn't overflow. */
+  .topbar > .fav-btn{padding:7px 11px}
+  .fav-btn .fav-label{display:none}
+
   /* filters toggle: visible chip next to the brand */
   .filters-toggle{
     display:inline-flex;align-items:center;gap:7px;flex-shrink:0;
@@ -486,6 +577,13 @@ body.no-sidebar .main{border-left:none}
   .filters-toggle:hover,.filters-toggle[aria-expanded="true"]{
     color:var(--text);border-color:var(--c2);
   }
+
+  /* Series and Favourites have no filter facets, but the drawer still
+     holds the mode switch and sort controls -- keep it reachable, or
+     there is no way back to the other views on a phone. */
+  body.no-sidebar .sidebar{display:block}
+  body.no-sidebar .sidebar-title,
+  body.no-sidebar #facets{display:none}
 
   /* sidebar -> slide-in drawer */
   .sidebar{
@@ -585,7 +683,8 @@ body.no-sidebar .main{border-left:none}
 
 .tbadges{
   position:absolute;top:9px;right:9px;z-index:5;
-  display:flex;gap:5px;align-items:flex-start;
+  display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px;
+  align-items:flex-start;max-width:calc(100% - 52px);
 }
 .badge{
   font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;
@@ -598,6 +697,40 @@ body.no-sidebar .main{border-left:none}
   font-size:10.5px;font-weight:800;letter-spacing:.4px;white-space:nowrap;
   padding:3px 8px;border-radius:999px;
   color:#fff;background:#2f80ed;border:1px solid rgba(255,255,255,.28);
+}
+/* the favourites grid mixes characters and artists, so each tile says
+   which one it is */
+.badge-kind{
+  font-size:9.5px;font-weight:800;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--c3);
+}
+
+/* heart -- top-left, mirroring the badges on the right.
+   Hidden until hover so the artwork stays uncluttered; always shown
+   once hearted (so the list is scannable) and on touch screens, where
+   a hover-only control would be unreachable. */
+.tile-fav-btn{
+  position:absolute;top:9px;left:9px;z-index:6;
+  width:28px;height:28px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(7,7,14,.65);backdrop-filter:blur(8px);
+  border:1px solid var(--line-bright);color:#fff;
+  opacity:0;pointer-events:none;cursor:pointer;padding:0;
+  transition:opacity .15s,color .15s,background .15s,transform .12s,
+             border-color .15s;
+}
+.tile-fav-btn svg{width:14px;height:14px;display:block}
+.tile:hover .tile-fav-btn,
+.tile:focus-within .tile-fav-btn{opacity:1;pointer-events:auto}
+.tile-fav-btn:hover{transform:scale(1.08);
+  color:var(--c1);border-color:var(--c1)}
+.tile-fav-btn:active{transform:scale(.94)}
+.tile-fav-btn.on{
+  color:var(--c1);background:rgba(255,46,136,.18);
+  border-color:rgba(255,46,136,.6);opacity:1;pointer-events:auto;
+}
+@media(hover:none){
+  .tile-fav-btn{opacity:1;pointer-events:auto}
 }
 
 /* LoRA hover panel ---------------------------------------------------- */

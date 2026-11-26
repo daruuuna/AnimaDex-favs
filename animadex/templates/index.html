@@ -56,10 +56,21 @@
               aria-label="Search">⌕</button>
     </div>
 
+    <!-- Your hearted list. Takes the slot the hosted site uses for its
+         "Run offline · download" GitHub pill -- this build is the
+         self-host, so that link has nothing to point at. -->
+    <a class="fav-btn" id="fav-btn" href="/?mode=favourites"
+       title="Your favourites">
+      <span class="fav-ico" aria-hidden="true">♥</span>
+      <span class="fav-label">Favourites</span>
+      <span class="fav-count" id="fav-count" hidden>0</span>
+    </a>
+
     <div class="sort" id="sort">
       <button data-sort="count" class="on">Image Count</button>
       <button data-sort="az">A–Z</button>
       <button data-sort="score" hidden>Score</button>
+      <button data-sort="recent" hidden>Recently Added</button>
       <button data-sort="random" title="Click again to reshuffle">⚄ Random</button>
     </div>
   </header>
@@ -115,6 +126,64 @@
         artist's Anima-generated render — representative of that output
         only, and not a direct or accurate measure of the artist's own
         aesthetic quality.
+      </div>
+
+      <!-- Favourites toolbar: narrow the list by type, back it up, or
+           pull a list in from the hosted site. All inline -- no page
+           change, so the grid updates under your cursor. -->
+      <div id="fav-note" class="favbar" hidden
+           title="Your favourites live in this install's own database, not in an account. Heart the ♡ on any tile to add one; tap it again to drop it.">
+        <div class="favbar-group" id="fav-filters"
+             role="group" aria-label="Filter favourites by type">
+          <span class="favbar-label">Show</span>
+          <label class="fopt on">
+            <input type="checkbox" data-favkind="characters" checked>
+            <span class="box"></span>
+            <span class="fl">Characters</span>
+            <span class="fc" data-favkind-count="characters">0</span>
+          </label>
+          <label class="fopt on">
+            <input type="checkbox" data-favkind="artists" checked>
+            <span class="box"></span>
+            <span class="fl">Artists</span>
+            <span class="fc" data-favkind-count="artists">0</span>
+          </label>
+        </div>
+
+        <div class="favbar-group favbar-right">
+          <span class="favbar-label">Backup</span>
+          <a class="favbar-link"
+             href="{{ url_for('favourites.api_favourites_export') }}?format=csv">CSV</a>
+          <a class="favbar-link"
+             href="{{ url_for('favourites.api_favourites_export') }}?format=txt">Text</a>
+          <span class="favbar-sep">|</span>
+          <button type="button" class="favbar-btn" id="fav-import-btn"
+                  aria-expanded="false"
+                  aria-controls="fav-import-panel">Import…</button>
+        </div>
+
+        <div class="favimport" id="fav-import-panel" hidden>
+          <p class="favimport-hint">
+            Feed back a list exported from animadex.net or from this
+            site — either the CSV or the text version. Your existing
+            favourites keep their place; new ones are added on top in
+            the file's own order.
+          </p>
+          <div class="favbar-group">
+            <input type="file" id="fav-import-file"
+                   accept=".csv,.txt,text/csv,text/plain">
+            <label class="fopt">
+              <input type="checkbox" id="fav-import-replace">
+              <span class="box"></span>
+              <span class="fl">Replace my list</span>
+            </label>
+            <button type="button" class="favbar-btn primary"
+                    id="fav-import-go">Import</button>
+            <button type="button" class="favbar-btn"
+                    id="fav-import-cancel">Cancel</button>
+            <span class="favbar-status" id="fav-import-status"></span>
+          </div>
+        </div>
       </div>
 
       <div id="gallery" class="gallery"></div>
