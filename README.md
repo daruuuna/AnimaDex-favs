@@ -1,4 +1,30 @@
-# AnimaDex
+# AnimaDex-favs
+
+AnimaDex is a pretty great tool to have when you want to know what artist/character is in
+Anima's dataset at a quick glance, and it's very nice to have a premade project you can
+just deploy. However, upstream hasn't been touched in months, and the public website has
+a few features I want that do not exist on the self-hosted version - specifically,
+the inclusion of the favourites list. after opening an issue on the original repo
+months back and getting no reply, I got tired of waiting and set my copy of
+Qwen3.8-Flash-Next to work on the repo over a few hours. these are the results.
+
+included for the time being is:
+- single-user favourites;
+- a filter function in said favourites for artists/characters only (a feature that is
+somehow missing from the public site);
+- the ability to take the exported text or csv files from the public site and import them
+into this fork, retaining the original added-to-favourites ordering
+
+I did not replicate the multi-user functionality because I am the only one who will ever
+access my instance of AnimaDex, nor are any features related to multi-user replicated
+here (favourites only, no likes, no upvotes/downvotes). that being said, I might add
+the favourite ratings/collections or something later, since I find myself returning
+to certain artists or characters over others, but for now this is a good start. this was
+tested with the full-sized dataset pull from the public site and all appears to work fine
+
+the original readme is printed below, with the inclusions of a section on Favourites
+
+## AnimaDex
 
 Self-hosted, searchable gallery for AI-generated anime character and
 artist references. Flask backend, vanilla JS frontend, SQLite storage,
@@ -18,7 +44,7 @@ Built around three datasets:
 ## Quick start
 
 ```bash
-git clone https://github.com/your-username/AnimaDex.git
+git clone https://github.com/daruuuna/AnimaDex-favs
 cd AnimaDex
 ./install.sh       # creates .venv, installs deps, seeds samples
 ./run.sh           # serves on http://127.0.0.1:5000
@@ -27,7 +53,7 @@ cd AnimaDex
 Windows:
 
 ```bat
-git clone https://github.com/your-username/AnimaDex.git
+git clone https://github.com/daruuuna/AnimaDex-favs
 cd AnimaDex
 install.bat
 run.bat
